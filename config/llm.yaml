@@ -1,0 +1,6 @@
+llm:
+  provider: openai
+  model: gpt-4o
+  base_url: https://api.openai.com
+  api_key: "${ENV:OPENAI_API_KEY}"
+  thinking: medium
