@@ -7,6 +7,7 @@ from secagent.llm.config import LLMConfig
 from secagent.llm.thinking import get_thinking_params, list_thinking_levels
 from secagent.llm.cache import ModelCache
 from secagent.llm.client import LLMClient, LLMRequestError
+from secagent.llm.model_fetcher import ModelFetcher, ModelFetchError
 from secagent.cli.main import main
 import requests
 
@@ -66,6 +67,29 @@ def test_llm_client_wraps_connection_error():
             assert False
         except LLMRequestError as exc:
             assert "无法连接模型接口" in str(exc)
+
+
+def test_model_fetcher_requires_valid_key():
+    fetcher = ModelFetcher("openai", "", "https://api.openai.com")
+    try:
+        fetcher.fetch_verified()
+        assert False
+    except ModelFetchError as exc:
+        assert "API Key 未配置" in str(exc)
+
+
+def test_model_fetcher_does_not_fallback_on_auth_error():
+    fetcher = ModelFetcher("openai", "bad-key", "https://api.openai.com")
+    response = requests.Response()
+    response.status_code = 401
+    response._content = b'{"error":{"message":"invalid key"}}'
+    http_error = requests.HTTPError(response=response)
+    with patch.object(fetcher, "_fetch_from_api", side_effect=http_error):
+        try:
+            fetcher.fetch_verified()
+            assert False
+        except ModelFetchError as exc:
+            assert "invalid key" in str(exc)
 
 
 if __name__ == "__main__":
