@@ -16,7 +16,11 @@ def main():
     parser.add_argument("--safety", help="安全模式: strict/smart/yolo")
     args = parser.parse_args()
 
-    main_interactive()
+    main_interactive(
+        config_path=args.config,
+        thinking=args.thinking,
+        safety=args.safety,
+    )
 
 
 if __name__ == "__main__":

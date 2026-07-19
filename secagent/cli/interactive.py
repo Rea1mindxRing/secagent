@@ -296,12 +296,16 @@ def build_conversation_body(conversation: List) -> Panel:
     )
 
 
-def main_interactive():
+def main_interactive(
+    config_path: Optional[str] = None,
+    thinking: Optional[str] = None,
+    safety: Optional[str] = None,
+):
     console.clear()
 
     # ── 初始配置 ──
     console.print(print_banner())
-    config_path = os.path.expanduser("~/.secagent/config.yaml")
+    config_path = os.path.expanduser(config_path or "~/.secagent/config.yaml")
 
     if os.path.exists(config_path):
         if Prompt.ask("发现现有配置，是否使用？", choices=["y", "n"], default="y") == "y":
@@ -311,7 +315,10 @@ def main_interactive():
     else:
         config = configure_llm()
 
-    safety_mode = configure_safety()
+    if thinking and thinking in list_thinking_levels():
+        config.thinking = thinking
+
+    safety_mode = SafetyMode.from_string(safety) if safety else configure_safety()
     safety_manager = SafetyManager(safety_mode)
     safety_manager.set_approval_callback(approval_prompt)
     llm_client = LLMClient(config)
