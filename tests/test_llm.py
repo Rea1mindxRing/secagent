@@ -1,10 +1,12 @@
 import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from unittest.mock import patch
 
 from secagent.llm.config import LLMConfig
 from secagent.llm.thinking import get_thinking_params, list_thinking_levels
 from secagent.llm.cache import ModelCache
+from secagent.cli.main import main
 
 
 def test_config():
@@ -32,6 +34,17 @@ def test_cache():
     assert result == {"models": ["test"]}
     cache.cleanup()
     print("✓ Cache 测试通过")
+
+
+def test_cli_args_passed_to_main_interactive():
+    with patch("secagent.cli.main.main_interactive") as mock_main:
+        with patch.object(sys, "argv", ["secagent", "--config", "/tmp/a.yaml", "--thinking", "high", "--safety", "strict"]):
+            main()
+    mock_main.assert_called_once_with(
+        config_path="/tmp/a.yaml",
+        thinking="high",
+        safety="strict",
+    )
 
 
 if __name__ == "__main__":
