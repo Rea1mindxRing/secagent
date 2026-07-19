@@ -36,6 +36,10 @@ MODEL_PRICING = {
 DEFAULT_PRICING = {"input": 5.0, "output": 15.0}
 
 
+class LLMRequestError(Exception):
+    pass
+
+
 def get_model_context_limit(model: str) -> int:
     for key, limit in MODEL_CONTEXT_LIMITS.items():
         if key in model:
@@ -70,6 +74,11 @@ class LLMClient:
             headers["Authorization"] = f"Bearer {key}"
 
         return headers
+
+    def _validate_config(self):
+        key = self._render_key().strip()
+        if not key:
+            raise LLMRequestError("API Key 未配置，请先设置 `OPENAI_API_KEY` 或重新执行 `config`。")
 
     def _build_body(
         self,
@@ -123,37 +132,56 @@ class LLMClient:
 
     def stream(self, prompt: str, system: str = "", tools: Optional[list] = None) -> Iterator[str]:
         """流式请求 LLM，逐 chunk 返回文本"""
+        self._validate_config()
         headers = self._build_headers()
         body = self._build_body(prompt, system=system, tools=tools, stream=True)
         endpoint = self._get_endpoint()
+        try:
+            resp = self.session.post(endpoint, headers=headers, json=body, stream=True, timeout=120)
+            resp.raise_for_status()
 
-        resp = self.session.post(endpoint, headers=headers, json=body, stream=True, timeout=120)
-        resp.raise_for_status()
-
-        for line in resp.iter_lines(decode_unicode=True):
-            if not line:
-                continue
-            # 兼容 SSE: data: {...}
-            if line.startswith("data:"):
-                line = line[5:].strip()
-            if line == "[DONE]":
-                break
-            try:
-                data = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            for chunk in self._parse_stream_chunk(data):
-                yield chunk
+            for line in resp.iter_lines(decode_unicode=True):
+                if not line:
+                    continue
+                if line.startswith("data:"):
+                    line = line[5:].strip()
+                if line == "[DONE]":
+                    break
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                for chunk in self._parse_stream_chunk(data):
+                    yield chunk
+        except requests.Timeout as exc:
+            raise LLMRequestError(f"连接模型超时：`{endpoint}`") from exc
+        except requests.ConnectionError as exc:
+            raise LLMRequestError(f"无法连接模型接口：`{endpoint}`") from exc
+        except requests.HTTPError as exc:
+            detail = exc.response.text[:300] if exc.response is not None else str(exc)
+            raise LLMRequestError(f"模型接口返回错误：{detail}") from exc
+        except requests.RequestException as exc:
+            raise LLMRequestError(f"模型请求失败：{exc}") from exc
 
     def chat(self, prompt: str, system: str = "", tools: Optional[list] = None) -> Dict[str, Any]:
         """非流式请求 LLM"""
+        self._validate_config()
         headers = self._build_headers()
         body = self._build_body(prompt, system=system, tools=tools, stream=False)
         endpoint = self._get_endpoint()
-
-        resp = self.session.post(endpoint, headers=headers, json=body, timeout=120)
-        resp.raise_for_status()
-        return self._parse_response(resp.json())
+        try:
+            resp = self.session.post(endpoint, headers=headers, json=body, timeout=120)
+            resp.raise_for_status()
+            return self._parse_response(resp.json())
+        except requests.Timeout as exc:
+            raise LLMRequestError(f"连接模型超时：`{endpoint}`") from exc
+        except requests.ConnectionError as exc:
+            raise LLMRequestError(f"无法连接模型接口：`{endpoint}`") from exc
+        except requests.HTTPError as exc:
+            detail = exc.response.text[:300] if exc.response is not None else str(exc)
+            raise LLMRequestError(f"模型接口返回错误：{detail}") from exc
+        except requests.RequestException as exc:
+            raise LLMRequestError(f"模型请求失败：{exc}") from exc
 
     def _parse_response(self, data: Dict) -> Dict[str, Any]:
         usage = data.get("usage", {})

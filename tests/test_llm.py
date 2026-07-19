@@ -6,7 +6,9 @@ from unittest.mock import patch
 from secagent.llm.config import LLMConfig
 from secagent.llm.thinking import get_thinking_params, list_thinking_levels
 from secagent.llm.cache import ModelCache
+from secagent.llm.client import LLMClient, LLMRequestError
 from secagent.cli.main import main
+import requests
 
 
 def test_config():
@@ -45,6 +47,25 @@ def test_cli_args_passed_to_main_interactive():
         thinking="high",
         safety="strict",
     )
+
+
+def test_llm_client_requires_api_key():
+    client = LLMClient(LLMConfig(api_key=""))
+    try:
+        list(client.stream("hello"))
+        assert False
+    except LLMRequestError as exc:
+        assert "API Key 未配置" in str(exc)
+
+
+def test_llm_client_wraps_connection_error():
+    client = LLMClient(LLMConfig(api_key="test-key"))
+    with patch.object(client.session, "post", side_effect=requests.ConnectionError("boom")):
+        try:
+            list(client.stream("hello"))
+            assert False
+        except LLMRequestError as exc:
+            assert "无法连接模型接口" in str(exc)
 
 
 if __name__ == "__main__":
