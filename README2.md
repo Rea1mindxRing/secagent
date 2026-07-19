@@ -9,7 +9,7 @@
 ## 一、工作流程（每次必看）
 
 ```
-更新代码 → 新建分支 → 改代码 → 提交 → 推送 → 提 Pull Request → 合并
+更新代码 → 新建分支 → 改代码 → 提交 → 推送 → 提 Pull Request → 合并 → 删分支
 ```
 
 **一句话：永远不要在 main 分支上直接改代码。**
@@ -94,11 +94,14 @@ git push origin feat/add-login
 
 > **如果提示 "This branch is out-of-date"：** 在 PR 页面点 **"Update branch"** 按钮，等 CI 重新跑完即可。
 
-> **重要：** 合并后，切换到主分支更新本地代码：
+> **重要：** 合并后，收尾工作：
 > ```bash
-> git checkout main
-> git pull
+> git checkout main          # 切回 main
+> git pull                   # 拉取最新代码
+> git branch -d feat/xxx     # 删掉本地分支
 > ```
+>
+> 然后再去 GitHub 上点 **"Delete branch"** 按钮删掉远程分支。
 
 ---
 
@@ -174,6 +177,8 @@ git pull             # 拉取最新代码
             ├── fix/xxx（他改他的）
             │
      通过 Pull Request 审查后合并回 main
+            │
+            ❌ 删掉已合并的分支（保持仓库干净）
 ```
 
 **记住一条铁律：永远不在 main 上直接改，永远不直接 push main。**
