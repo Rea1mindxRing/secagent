@@ -18,7 +18,7 @@ from rich.align import Align
 
 from ..llm.config import LLMConfig
 from ..llm.client import LLMClient, LLMRequestError, get_model_context_limit
-from ..llm.model_fetcher import ModelFetcher
+from ..llm.model_fetcher import ModelFetcher, ModelFetchError
 from ..llm.thinking import list_thinking_levels
 from ..llm.cache import ModelCache
 from ..security.safety_manager import SafetyManager, ApprovalRequest
@@ -94,15 +94,19 @@ def configure_llm() -> LLMConfig:
     thinking_idx = IntPrompt.ask("选择思考强度", default=3) - 1
     thinking = levels[thinking_idx]
 
-    console.print(Panel.fit("[bold yellow]⏳ 正在获取可用模型列表...[/]", border_style="yellow"))
-
     def _resolve_api_key(key: str) -> str:
         if key.startswith("${ENV:") and key.endswith("}"):
             return os.environ.get(key[6:-1], "")
         return key
 
-    fetcher = ModelFetcher(provider, _resolve_api_key(api_key), base_url)
-    models = fetcher.fetch()
+    resolved_api_key = _resolve_api_key(api_key).strip()
+    console.print(Panel.fit("[bold yellow]⏳ 正在验证接口并获取可用模型...[/]", border_style="yellow"))
+    fetcher = ModelFetcher(provider, resolved_api_key, base_url)
+    try:
+        models = fetcher.fetch_verified()
+    except ModelFetchError as exc:
+        console.print(Panel.fit(f"[red]❌ {exc}[/]\n[dim]请先修正 API 地址或 Key，再重新配置。[/]", border_style="red"))
+        return configure_llm()
 
     model_table = Table(title="[bold]可用模型[/]", box=box.ROUNDED, border_style="cyan", highlight=True)
     model_table.add_column("#", style="dim", width=4)

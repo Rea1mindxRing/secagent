@@ -3,6 +3,10 @@ import json
 from typing import List, Dict
 from .cache import ModelCache
 
+
+class ModelFetchError(Exception):
+    pass
+
 MODEL_KNOWLEDGE = {
     "claude-fable-5": {"pros": ["最强推理能力", "100万上下文", "视觉理解"], "cons": ["价格最高", "响应较慢"]},
     "claude-sonnet-5": {"pros": ["性价比高", "代码能力强", "适合日常安全任务"], "cons": ["推理能力略低于Fable"]},
@@ -38,6 +42,32 @@ class ModelFetcher:
             return enriched
         except Exception:
             return self._get_fallback_models()
+
+    def fetch_verified(self, force_refresh: bool = True) -> List[Dict]:
+        if not self.api_key.strip():
+            raise ModelFetchError("API Key 未配置。")
+
+        if not force_refresh:
+            cached = self.cache.get(self.provider, self.base_url, self.api_key)
+            if cached:
+                return cached
+
+        try:
+            models = self._fetch_from_api()
+            if not models:
+                raise ModelFetchError("接口可访问，但没有返回可用模型。")
+            enriched = self._enrich_models(models)
+            self.cache.set(self.provider, self.base_url, self.api_key, enriched)
+            return enriched
+        except requests.Timeout as exc:
+            raise ModelFetchError(f"连接模型接口超时：`{self.base_url}`") from exc
+        except requests.ConnectionError as exc:
+            raise ModelFetchError(f"无法连接模型接口：`{self.base_url}`") from exc
+        except requests.HTTPError as exc:
+            detail = exc.response.text[:300] if exc.response is not None else str(exc)
+            raise ModelFetchError(f"模型接口认证或请求失败：{detail}") from exc
+        except requests.RequestException as exc:
+            raise ModelFetchError(f"模型接口请求失败：{exc}") from exc
 
     def _fetch_from_api(self) -> List[Dict]:
         headers = self._build_headers()
