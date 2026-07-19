@@ -334,20 +334,23 @@ def main_interactive():
     layout["status"].update(build_status_bar(config, safety_mode, llm_client))
     layout["input"].update(build_input_box(placeholder=True))
 
-    with Live(layout, refresh_per_second=4, screen=True) as live:
+    with Live(layout, refresh_per_second=4, screen=False, transient=False) as live:
         while True:
-            # 更新状态栏和输入框
+            # 更新状态栏和输入框（占位状态）
             layout["status"].update(build_status_bar(config, safety_mode, llm_client))
             layout["input"].update(build_input_box(placeholder=True))
             live.update(layout)
 
-            # 获取输入——console.input 会暂停 Live 再恢复
-            # 提示符样式与输入框一致，视觉上形成连贯的输入区域
+            # 关键：手动 stop() 让 console._live 置空，console.input() 不会清除 Live 内容
+            # transient=False 保证 stop() 时布局（含输入框边框）保留在屏幕上
+            live.stop()
             try:
                 cmd = console.input("[bold bright_cyan]❯ [/]").strip()
             except (EOFError, KeyboardInterrupt):
                 console.print("\n[bold yellow]👋 再见！[/]")
                 break
+            # 恢复 Live，重新渲染布局（覆盖提示符行）
+            live.start()
 
             if not cmd:
                 continue
