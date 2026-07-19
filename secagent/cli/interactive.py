@@ -17,7 +17,7 @@ from rich import box
 from rich.align import Align
 
 from ..llm.config import LLMConfig
-from ..llm.client import LLMClient, get_model_context_limit
+from ..llm.client import LLMClient, LLMRequestError, get_model_context_limit
 from ..llm.model_fetcher import ModelFetcher
 from ..llm.thinking import list_thinking_levels
 from ..llm.cache import ModelCache
@@ -480,18 +480,37 @@ def main_interactive(
             layout["input"].update(build_input_box(placeholder=True))
             live.update(layout)
 
-            for chunk in llm_client.stream(cmd):
-                response_chunks.append(chunk)
-                md = Markdown("".join(response_chunks).strip())
-                ai_panel = Panel(
-                    md,
-                    title="[bold green]🤖 AI[/]",
+            try:
+                for chunk in llm_client.stream(cmd):
+                    response_chunks.append(chunk)
+                    md = Markdown("".join(response_chunks).strip())
+                    ai_panel = Panel(
+                        md,
+                        title="[bold green]🤖 AI[/]",
+                        title_align="left",
+                        border_style="green",
+                        box=box.SQUARE,
+                        padding=(0, 1),
+                    )
+                    conversation[-1] = ai_panel
+                    layout["body"].update(build_conversation_body(conversation))
+                    layout["status"].update(build_status_bar(config, safety_mode, llm_client))
+                    live.update(layout)
+            except KeyboardInterrupt:
+                conversation[-1] = Panel(
+                    "[yellow]⚠️ 已取消本次模型请求[/]",
+                    title="[bold yellow]🤖 AI[/]",
                     title_align="left",
-                    border_style="green",
+                    border_style="yellow",
                     box=box.SQUARE,
                     padding=(0, 1),
                 )
-                conversation[-1] = ai_panel
-                layout["body"].update(build_conversation_body(conversation))
-                layout["status"].update(build_status_bar(config, safety_mode, llm_client))
-                live.update(layout)
+            except LLMRequestError as exc:
+                conversation[-1] = Panel(
+                    f"[red]❌ {exc}[/]\n[dim]可执行 `config` 重新配置模型，或检查网络/API Key。[/]",
+                    title="[bold red]🤖 AI[/]",
+                    title_align="left",
+                    border_style="red",
+                    box=box.SQUARE,
+                    padding=(0, 1),
+                )
