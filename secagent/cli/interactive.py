@@ -162,82 +162,129 @@ def execute_command(cmd: str) -> dict:
 
 
 def build_status_bar(config: LLMConfig, safety_mode: SafetyMode, llm_client: LLMClient) -> Panel:
-    """构建包含模型信息和会话统计的状态栏"""
-    # 左半部分：模型名 + 上下文用量
+    """构建精简单行状态栏"""
     model = config.model
     context_limit = get_model_context_limit(model)
     usage = llm_client.last_usage
     total_used = usage.get("total_tokens", 0)
     context_pct = (total_used / context_limit * 100) if context_limit > 0 else 0
 
-    left_text = Text.assemble(
-        ("Model: ", "bold"),
-        (f"{model}", "bright_cyan"),
-        " │ ",
-        ("Context: ", "bold"),
-        (f"{total_used:,}", "yellow" if context_pct < 70 else "red"),
-        (" / ", "dim"),
-        (f"{context_limit:,}", "dim"),
-        (" (", "dim"),
-        (f"{context_pct:.1f}%", "green" if context_pct < 50 else ("yellow" if context_pct < 80 else "red")),
-        (")", "dim"),
-    )
+    # 上下文用量颜色
+    if context_pct < 50:
+        ctx_color = "green"
+    elif context_pct < 80:
+        ctx_color = "yellow"
+    else:
+        ctx_color = "red"
 
-    # 右半部分：缓存命中率 + 消耗
+    # 安全模式颜色
+    if safety_mode == SafetyMode.YOLO:
+        safety_color = "bold red"
+    elif safety_mode == SafetyMode.STRICT:
+        safety_color = "yellow"
+    else:
+        safety_color = "green"
+
+    # 缓存命中率
     cache_rate = _cache.get_cache_hit_rate()
+    cache_color = "green" if cache_rate > 50 else "dim"
+
+    # 会话消耗
     session = llm_client.session_stats
     cost = session.get("cost", 0)
 
-    right_text = Text.assemble(
-        ("Cache: ", "bold"),
-        (f"{cache_rate:.1f}%", "green" if cache_rate > 50 else "yellow"),
-        " │ ",
-        ("Cost: ", "bold"),
-        (f"¥{cost:.4f}", "cyan"),
-    )
-
-    # 用空格填充中间，让左右各占一半
-    # 第1行：模型名 + 上下文
-    row1 = Text.assemble(
-        left_text,
-        " " * 4,
-        right_text,
-    )
-
-    # 第2行：安全模式 + 思考强度 + 对话轮次
-    row2 = Text.assemble(
-        ("Safety: ", "bold"),
-        (f"{safety_mode.value}", "red" if safety_mode == SafetyMode.YOLO else ("yellow" if safety_mode == SafetyMode.STRICT else "green")),
-        " │ ",
-        ("Thinking: ", "bold"),
+    status_text = Text.assemble(
+        (" 🤖 ", ""),
+        (f"{model}", "bold bright_cyan"),
+        (" │ ", "dim"),
+        ("🧠 ", ""),
         (f"{config.thinking}", "magenta"),
-        " │ ",
-        ("Tokens: ", "bold"),
-        (f"↑{session.get('input_tokens', 0):,}", "dim"),
-        (" ↓", "dim"),
-        (f"{session.get('output_tokens', 0):,}", "dim"),
+        (" │ ", "dim"),
+        ("🛡️ ", ""),
+        (f"{safety_mode.value}", safety_color),
+        (" │ ", "dim"),
+        ("📊 ", ""),
+        (f"{total_used:,}/{context_limit:,}", ctx_color),
+        (f" ({context_pct:.1f}%)", "dim"),
+        (" │ ", "dim"),
+        ("💾 ", ""),
+        (f"{cache_rate:.0f}%", cache_color),
+        (" │ ", "dim"),
+        ("💰 ", ""),
+        (f"¥{cost:.4f}", "bright_yellow"),
     )
 
     return Panel(
-        Text.assemble(row1, "\n", row2),
+        status_text,
         border_style="bright_black",
-        box=box.ROUNDED,
+        box=box.SQUARE,
         padding=(0, 1),
-        title="[dim]📊 Status[/]",
+        height=3,
+    )
+
+
+def build_input_box(placeholder: bool = True, current_input: str = "") -> Panel:
+    """构建底部输入框
+
+    placeholder=True 时显示占位提示，False 时显示当前输入内容
+    """
+    if placeholder:
+        content = Text.assemble(
+            ("❯ ", "bold cyan"),
+            ("输入消息，按 Enter 发送 · ", "dim"),
+            ("!cmd", "yellow"),
+            (" 执行命令 · ", "dim"),
+            ("help", "green"),
+            (" 查看帮助", "dim"),
+        )
+        border_style = "cyan"
+        title = "[bold cyan]💬 输入[/]"
+    else:
+        content = Text.assemble(
+            ("❯ ", "bold cyan"),
+            (current_input, "bold white"),
+            ("_", "cyan blink"),
+        )
+        border_style = "bright_cyan"
+        title = "[bold bright_cyan]💬 输入[/]"
+
+    return Panel(
+        content,
+        border_style=border_style,
+        box=box.HEAVY,
+        padding=(0, 1),
+        height=3,
+        title=title,
+        title_align="left",
     )
 
 
 def build_conversation_body(conversation: List) -> Panel:
     """构建对话正文"""
     if not conversation:
+        welcome = Text.assemble(
+            ("\n\n", ""),
+            ("🛡️  ", "bold cyan"),
+            ("欢迎使用 SecAgent", "bold white"),
+            ("\n\n", ""),
+            ("专为网络安全研究设计的 CLI Agent\n\n", "dim"),
+            ("  ❯  ", "bold cyan"),
+            ("直接输入内容与 AI 对话\n", "white"),
+            ("  ❯  ", "bold yellow"),
+            ("输入 ", "white"),
+            ("!command", "yellow"),
+            (" 执行 shell 命令\n", "white"),
+            ("  ❯  ", "bold green"),
+            ("输入 ", "white"),
+            ("help", "green"),
+            (" 查看所有命令\n\n", "white"),
+        )
         return Panel(
-            Align.center(
-                Text("\n\n💬 开始对话吧！\n\n直接输入内容与 AI 对话\n输入 !<command> 执行 shell 命令\n输入 help 查看帮助\n\n", style="dim"),
-                vertical="middle",
-            ),
+            Align.center(welcome, vertical="middle"),
             border_style="bright_black",
             box=box.ROUNDED,
             padding=(1, 2),
+            title="[bold bright_black]💬 对话[/]",
         )
 
     return Panel(
@@ -245,7 +292,7 @@ def build_conversation_body(conversation: List) -> Panel:
         border_style="bright_black",
         box=box.ROUNDED,
         padding=(1, 2),
-        title="[bold]💬 对话[/]",
+        title="[bold bright_black]💬 对话[/]",
     )
 
 
@@ -269,13 +316,14 @@ def main_interactive():
     safety_manager.set_approval_callback(approval_prompt)
     llm_client = LLMClient(config)
 
-    # ── 构建 Live Layout ──
+    # ── 构建 Live Layout（三段式：对话/状态栏/输入框）──
     conversation: List = []  # 对话历史（Renderable 列表）
 
     layout = Layout()
     layout.split_column(
         Layout(name="body", ratio=1, minimum_size=10),
-        Layout(name="footer", size=5),
+        Layout(name="status", size=3),
+        Layout(name="input", size=3),
     )
 
     console.clear()
@@ -283,17 +331,20 @@ def main_interactive():
 
     # 构建初始布局
     layout["body"].update(build_conversation_body(conversation))
-    layout["footer"].update(build_status_bar(config, safety_mode, llm_client))
+    layout["status"].update(build_status_bar(config, safety_mode, llm_client))
+    layout["input"].update(build_input_box(placeholder=True))
 
     with Live(layout, refresh_per_second=4, screen=True) as live:
         while True:
-            # 更新状态栏
-            layout["footer"].update(build_status_bar(config, safety_mode, llm_client))
+            # 更新状态栏和输入框
+            layout["status"].update(build_status_bar(config, safety_mode, llm_client))
+            layout["input"].update(build_input_box(placeholder=True))
             live.update(layout)
 
             # 获取输入——console.input 会暂停 Live 再恢复
+            # 提示符样式与输入框一致，视觉上形成连贯的输入区域
             try:
-                cmd = console.input("[bold cyan]secagent> [/]").strip()
+                cmd = console.input("[bold bright_cyan]❯ [/]").strip()
             except (EOFError, KeyboardInterrupt):
                 console.print("\n[bold yellow]👋 再见！[/]")
                 break
@@ -335,7 +386,7 @@ def main_interactive():
                     box=box.ROUNDED,
                 ))
                 layout["body"].update(build_conversation_body(conversation))
-                layout["footer"].update(build_status_bar(config, safety_mode, llm_client))
+                layout["status"].update(build_status_bar(config, safety_mode, llm_client))
                 live.start(refresh_per_second=4)
                 continue
 
@@ -361,7 +412,7 @@ def main_interactive():
                 else:
                     conversation.append(Text(f"❌ 无效的安全模式: {mode}", style="red"))
                 layout["body"].update(build_conversation_body(conversation))
-                layout["footer"].update(build_status_bar(config, safety_mode, llm_client))
+                layout["status"].update(build_status_bar(config, safety_mode, llm_client))
                 live.update(layout)
                 continue
 
@@ -414,12 +465,13 @@ def main_interactive():
                 continue
 
             # ── 默认：LLM 对话 ──
-            # 用户消息
+            # 用户消息（右对齐标题，模拟聊天应用）
             user_msg = Panel(
-                Text(cmd, style="bold white"),
+                Text(cmd, style="white"),
                 title="[bold cyan]👤 你[/]",
+                title_align="right",
                 border_style="cyan",
-                box=box.ROUNDED,
+                box=box.SQUARE,
                 padding=(0, 1),
             )
             conversation.append(user_msg)
@@ -431,8 +483,9 @@ def main_interactive():
             thinking_panel = Panel(
                 "[dim]🤔 思考中...[/]",
                 title="[bold green]🤖 AI[/]",
+                title_align="left",
                 border_style="green",
-                box=box.ROUNDED,
+                box=box.SQUARE,
                 padding=(0, 1),
             )
             conversation.append(thinking_panel)
@@ -446,15 +499,16 @@ def main_interactive():
                 ai_panel = Panel(
                     md,
                     title="[bold green]🤖 AI[/]",
+                    title_align="left",
                     border_style="green",
-                    box=box.ROUNDED,
+                    box=box.SQUARE,
                     padding=(0, 1),
                 )
                 conversation[-1] = ai_panel
                 layout["body"].update(build_conversation_body(conversation))
-                layout["footer"].update(build_status_bar(config, safety_mode, llm_client))
+                layout["status"].update(build_status_bar(config, safety_mode, llm_client))
                 live.update(layout)
 
             # 最终状态栏更新
-            layout["footer"].update(build_status_bar(config, safety_mode, llm_client))
+            layout["status"].update(build_status_bar(config, safety_mode, llm_client))
             live.update(layout)
