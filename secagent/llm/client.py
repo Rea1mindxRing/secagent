@@ -117,6 +117,44 @@ class LLMClient:
             return f"{base}/v1/messages"
         return f"{base}/v1/chat/completions"
 
+    def set_thinking(self, level: str):
+        """设置思考强度（low/medium/high/max/ultra）"""
+        self.config.thinking = level
+
+    def stream(self, prompt: str, system: str = "", tools: Optional[list] = None) -> Iterator[str]:
+        """流式请求 LLM，逐 chunk 返回文本"""
+        headers = self._build_headers()
+        body = self._build_body(prompt, system=system, tools=tools, stream=True)
+        endpoint = self._get_endpoint()
+
+        resp = self.session.post(endpoint, headers=headers, json=body, stream=True, timeout=120)
+        resp.raise_for_status()
+
+        for line in resp.iter_lines(decode_unicode=True):
+            if not line:
+                continue
+            # 兼容 SSE: data: {...}
+            if line.startswith("data:"):
+                line = line[5:].strip()
+            if line == "[DONE]":
+                break
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            for chunk in self._parse_stream_chunk(data):
+                yield chunk
+
+    def chat(self, prompt: str, system: str = "", tools: Optional[list] = None) -> Dict[str, Any]:
+        """非流式请求 LLM"""
+        headers = self._build_headers()
+        body = self._build_body(prompt, system=system, tools=tools, stream=False)
+        endpoint = self._get_endpoint()
+
+        resp = self.session.post(endpoint, headers=headers, json=body, timeout=120)
+        resp.raise_for_status()
+        return self._parse_response(resp.json())
+
     def _parse_response(self, data: Dict) -> Dict[str, Any]:
         usage = data.get("usage", {})
         self._last_usage = {
