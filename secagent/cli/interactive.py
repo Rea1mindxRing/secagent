@@ -316,9 +316,10 @@ def main_interactive():
     safety_manager.set_approval_callback(approval_prompt)
     llm_client = LLMClient(config)
 
-    # ── 构建 Live Layout（三段式：对话/状态栏/输入框）──
-    conversation: List = []  # 对话历史（Renderable 列表）
+    # ── 交互循环（静态渲染：每次输入前清屏重绘，输入框边框始终可见）──
+    conversation: List = []
 
+    # Layout 仅用于流式响应期间的实时刷新
     layout = Layout()
     layout.split_column(
         Layout(name="body", ratio=1, minimum_size=10),
@@ -326,178 +327,154 @@ def main_interactive():
         Layout(name="input", size=3),
     )
 
-    console.clear()
-    console.print(print_banner())
+    def render_screen():
+        """静态渲染整个屏幕：对话区（自适应高度）+ 状态栏 + 输入框"""
+        console.clear()
+        console.print(build_conversation_body(conversation))
+        console.print(build_status_bar(config, safety_mode, llm_client))
+        console.print(build_input_box(placeholder=True))
 
-    # 构建初始布局
-    layout["body"].update(build_conversation_body(conversation))
-    layout["status"].update(build_status_bar(config, safety_mode, llm_client))
-    layout["input"].update(build_input_box(placeholder=True))
+    while True:
+        render_screen()
+        try:
+            cmd = console.input("[bold bright_cyan]❯ [/]").strip()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[bold yellow]👋 再见！[/]")
+            break
 
-    with Live(layout, refresh_per_second=4, screen=False, transient=False) as live:
-        while True:
-            # 更新状态栏和输入框（占位状态）
+        if not cmd:
+            continue
+
+        # ── exit ──
+        if cmd in ("exit", "quit"):
+            console.print("\n[bold yellow]👋 再见！[/]")
+            break
+
+        # ── help ──
+        if cmd == "help":
+            help_table = Table(box=box.ROUNDED, border_style="cyan", show_header=False, padding=(0, 2))
+            help_table.add_column("命令", style="bold green", no_wrap=True)
+            help_table.add_column("说明", style="white")
+            help_table.add_row("exit / quit", "退出程序")
+            help_table.add_row("help", "显示帮助信息")
+            help_table.add_row("config", "重新配置 LLM 参数")
+            help_table.add_row("thinking <level>", "设置思考强度 (low/medium/high/max/ultra)")
+            help_table.add_row("safety <mode>", "设置安全模式 (strict/smart/yolo)")
+            help_table.add_row("!<command>", "执行 shell 命令（如 !dir）")
+            help_table.add_row("<text>", "直接输入内容与 AI 对话")
+            conversation.append(Panel(help_table, title="[bold]📖 帮助[/]", border_style="cyan"))
+            continue
+
+        # ── config ──
+        if cmd.startswith("config"):
+            config = configure_llm()
+            llm_client = LLMClient(config)
+            conversation = []
+            conversation.append(Panel(
+                "[green]✅ 配置已更新，已清空对话历史[/]",
+                border_style="green",
+                box=box.ROUNDED,
+            ))
+            continue
+
+        # ── thinking ──
+        if cmd.startswith("thinking "):
+            level = cmd.split()[1]
+            if level in list_thinking_levels():
+                llm_client.set_thinking(level)
+                conversation.append(Text(f"✅ 思考强度已设置为: {level}", style="green"))
+            else:
+                conversation.append(Text(f"❌ 无效的思考强度: {level}", style="red"))
+            continue
+
+        # ── safety ──
+        if cmd.startswith("safety "):
+            mode = cmd.split()[1]
+            if mode in SafetyMode.list_values():
+                safety_mode = SafetyMode.from_string(mode)
+                safety_manager.set_mode(safety_mode)
+                conversation.append(Text(f"✅ 安全模式已设置为: {mode}", style="green"))
+            else:
+                conversation.append(Text(f"❌ 无效的安全模式: {mode}", style="red"))
+            continue
+
+        # ── 执行 shell 命令 ──
+        if cmd.startswith("!"):
+            shell_cmd = cmd[1:].strip()
+            if not shell_cmd:
+                conversation.append(Text("请输入要执行的 shell 命令，例如: !dir", style="yellow"))
+                continue
+
+            start_time = datetime.now()
+            result = safety_manager.execute_with_safety(shell_cmd, execute_command)
+            elapsed = (datetime.now() - start_time).total_seconds()
+
+            if result.get("blocked"):
+                msg = Panel(
+                    f"[red]❌ {result.get('error')}[/]",
+                    title=f"[bold red]⛔ 命令被阻止: $ {shell_cmd}[/]",
+                    border_style="red",
+                    box=box.ROUNDED,
+                )
+            else:
+                output = ""
+                if result.get("stdout"):
+                    output += result["stdout"].rstrip()
+                if result.get("stderr"):
+                    output += f"\n[red]{result['stderr'].rstrip()}[/]"
+
+                if output:
+                    msg = Panel(
+                        output,
+                        title=f"[bold green]🖥️  $ {shell_cmd}[/]",
+                        subtitle=f"[dim]完成 ({elapsed:.1f}s)  exit code: {result.get('returncode', '?')}[/]",
+                        border_style="green",
+                        box=box.ROUNDED,
+                    )
+                else:
+                    msg = Panel(
+                        f"[green]✅ 命令执行完成 (exit code: {result.get('returncode', '?')})[/]",
+                        title=f"$ {shell_cmd}",
+                        border_style="green",
+                        box=box.ROUNDED,
+                    )
+
+            conversation.append(msg)
+            continue
+
+        # ── 默认：LLM 对话 ──
+        # 用户消息（右对齐标题，模拟聊天应用）
+        user_msg = Panel(
+            Text(cmd, style="white"),
+            title="[bold cyan]👤 你[/]",
+            title_align="right",
+            border_style="cyan",
+            box=box.SQUARE,
+            padding=(0, 1),
+        )
+        conversation.append(user_msg)
+
+        # 流式请求 LLM，实时更新
+        response_chunks = []
+        thinking_panel = Panel(
+            "[dim]🤔 思考中...[/]",
+            title="[bold green]🤖 AI[/]",
+            title_align="left",
+            border_style="green",
+            box=box.SQUARE,
+            padding=(0, 1),
+        )
+        conversation.append(thinking_panel)
+
+        # 流式响应期间用 Live 实时刷新整个屏幕
+        with Live(layout, refresh_per_second=10, screen=False, transient=False) as live:
+            layout["body"].update(build_conversation_body(conversation))
             layout["status"].update(build_status_bar(config, safety_mode, llm_client))
             layout["input"].update(build_input_box(placeholder=True))
             live.update(layout)
 
-            # 关键：手动 stop() 让 console._live 置空，console.input() 不会清除 Live 内容
-            # transient=False 保证 stop() 时布局（含输入框边框）保留在屏幕上
-            live.stop()
-            try:
-                cmd = console.input("[bold bright_cyan]❯ [/]").strip()
-            except (EOFError, KeyboardInterrupt):
-                console.print("\n[bold yellow]👋 再见！[/]")
-                break
-            # 恢复 Live，重新渲染布局（覆盖提示符行）
-            live.start()
-
-            if not cmd:
-                continue
-
-            # ── exit ──
-            if cmd in ("exit", "quit"):
-                console.print("\n[bold yellow]👋 再见！[/]")
-                break
-
-            # ── help ──
-            if cmd == "help":
-                help_table = Table(box=box.ROUNDED, border_style="cyan", show_header=False, padding=(0, 2))
-                help_table.add_column("命令", style="bold green", no_wrap=True)
-                help_table.add_column("说明", style="white")
-                help_table.add_row("exit / quit", "退出程序")
-                help_table.add_row("help", "显示帮助信息")
-                help_table.add_row("config", "重新配置 LLM 参数")
-                help_table.add_row("thinking <level>", "设置思考强度 (low/medium/high/max/ultra)")
-                help_table.add_row("safety <mode>", "设置安全模式 (strict/smart/yolo)")
-                help_table.add_row("!<command>", "执行 shell 命令（如 !dir）")
-                help_table.add_row("<text>", "直接输入内容与 AI 对话")
-                conversation.append(Panel(help_table, title="[bold]📖 帮助[/]", border_style="cyan"))
-                layout["body"].update(build_conversation_body(conversation))
-                live.update(layout)
-                continue
-
-            # ── config ──
-            if cmd.startswith("config"):
-                live.stop()
-                config = configure_llm()
-                llm_client = LLMClient(config)
-                conversation = []
-                conversation.append(Panel(
-                    "[green]✅ 配置已更新，已清空对话历史[/]",
-                    border_style="green",
-                    box=box.ROUNDED,
-                ))
-                layout["body"].update(build_conversation_body(conversation))
-                layout["status"].update(build_status_bar(config, safety_mode, llm_client))
-                live.start(refresh_per_second=4)
-                continue
-
-            # ── thinking ──
-            if cmd.startswith("thinking "):
-                level = cmd.split()[1]
-                if level in list_thinking_levels():
-                    llm_client.set_thinking(level)
-                    conversation.append(Text(f"✅ 思考强度已设置为: {level}", style="green"))
-                else:
-                    conversation.append(Text(f"❌ 无效的思考强度: {level}", style="red"))
-                layout["body"].update(build_conversation_body(conversation))
-                live.update(layout)
-                continue
-
-            # ── safety ──
-            if cmd.startswith("safety "):
-                mode = cmd.split()[1]
-                if mode in SafetyMode.list_values():
-                    safety_mode = SafetyMode.from_string(mode)
-                    safety_manager.set_mode(safety_mode)
-                    conversation.append(Text(f"✅ 安全模式已设置为: {mode}", style="green"))
-                else:
-                    conversation.append(Text(f"❌ 无效的安全模式: {mode}", style="red"))
-                layout["body"].update(build_conversation_body(conversation))
-                layout["status"].update(build_status_bar(config, safety_mode, llm_client))
-                live.update(layout)
-                continue
-
-            # ── 执行 shell 命令 ──
-            if cmd.startswith("!"):
-                shell_cmd = cmd[1:].strip()
-                if not shell_cmd:
-                    conversation.append(Text("请输入要执行的 shell 命令，例如: !dir", style="yellow"))
-                    layout["body"].update(build_conversation_body(conversation))
-                    live.update(layout)
-                    continue
-
-                start_time = datetime.now()
-                result = safety_manager.execute_with_safety(shell_cmd, execute_command)
-                elapsed = (datetime.now() - start_time).total_seconds()
-
-                if result.get("blocked"):
-                    msg = Panel(
-                        f"[red]❌ {result.get('error')}[/]",
-                        title=f"[bold red]⛔ 命令被阻止: $ {shell_cmd}[/]",
-                        border_style="red",
-                        box=box.ROUNDED,
-                    )
-                else:
-                    output = ""
-                    if result.get("stdout"):
-                        output += result["stdout"].rstrip()
-                    if result.get("stderr"):
-                        output += f"\n[red]{result['stderr'].rstrip()}[/]"
-
-                    if output:
-                        msg = Panel(
-                            output,
-                            title=f"[bold green]🖥️  $ {shell_cmd}[/]",
-                            subtitle=f"[dim]完成 ({elapsed:.1f}s)  exit code: {result.get('returncode', '?')}[/]",
-                            border_style="green",
-                            box=box.ROUNDED,
-                        )
-                    else:
-                        msg = Panel(
-                            f"[green]✅ 命令执行完成 (exit code: {result.get('returncode', '?')})[/]",
-                            title=f"$ {shell_cmd}",
-                            border_style="green",
-                            box=box.ROUNDED,
-                        )
-
-                conversation.append(msg)
-                layout["body"].update(build_conversation_body(conversation))
-                live.update(layout)
-                continue
-
-            # ── 默认：LLM 对话 ──
-            # 用户消息（右对齐标题，模拟聊天应用）
-            user_msg = Panel(
-                Text(cmd, style="white"),
-                title="[bold cyan]👤 你[/]",
-                title_align="right",
-                border_style="cyan",
-                box=box.SQUARE,
-                padding=(0, 1),
-            )
-            conversation.append(user_msg)
-            layout["body"].update(build_conversation_body(conversation))
-            live.update(layout)
-
-            # 流式请求 LLM，实时更新
-            response_chunks = []
-            thinking_panel = Panel(
-                "[dim]🤔 思考中...[/]",
-                title="[bold green]🤖 AI[/]",
-                title_align="left",
-                border_style="green",
-                box=box.SQUARE,
-                padding=(0, 1),
-            )
-            conversation.append(thinking_panel)
-            layout["body"].update(build_conversation_body(conversation))
-            live.update(layout)
-
             for chunk in llm_client.stream(cmd):
                 response_chunks.append(chunk)
-                # 实时更新 AI 响应面板
                 md = Markdown("".join(response_chunks).strip())
                 ai_panel = Panel(
                     md,
@@ -511,7 +488,3 @@ def main_interactive():
                 layout["body"].update(build_conversation_body(conversation))
                 layout["status"].update(build_status_bar(config, safety_mode, llm_client))
                 live.update(layout)
-
-            # 最终状态栏更新
-            layout["status"].update(build_status_bar(config, safety_mode, llm_client))
-            live.update(layout)
