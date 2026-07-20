@@ -8,6 +8,7 @@ from secagent.llm.thinking import get_thinking_params, list_thinking_levels
 from secagent.llm.cache import ModelCache
 from secagent.llm.client import LLMClient, LLMRequestError
 from secagent.llm.model_fetcher import ModelFetcher, ModelFetchError
+from secagent.llm.system_prompt import SECURITY_AGENT_SYSTEM_PROMPT
 from secagent.cli.main import main
 import requests
 
@@ -90,6 +91,20 @@ def test_model_fetcher_does_not_fallback_on_auth_error():
             assert False
         except ModelFetchError as exc:
             assert "invalid key" in str(exc)
+
+
+def test_security_system_prompt_is_sent_to_openai_compatible_api():
+    client = LLMClient(LLMConfig(api_key="test-key"))
+    response = requests.Response()
+    response.status_code = 200
+    response._content = b'{"choices":[{"message":{"content":"ok"}}],"usage":{}}'
+    with patch.object(client.session, "post", return_value=response) as post:
+        client.chat("scan localhost", system=SECURITY_AGENT_SYSTEM_PROMPT)
+
+    body = post.call_args.kwargs["json"]
+    assert body["messages"][0]["role"] == "system"
+    assert body["messages"][0]["content"] == SECURITY_AGENT_SYSTEM_PROMPT
+    assert "明确授权" in SECURITY_AGENT_SYSTEM_PROMPT
 
 
 if __name__ == "__main__":

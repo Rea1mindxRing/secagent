@@ -18,6 +18,7 @@ from rich.align import Align
 
 from ..llm.config import LLMConfig
 from ..llm.client import LLMClient, LLMRequestError, get_model_context_limit
+from ..llm.system_prompt import SECURITY_AGENT_SYSTEM_PROMPT
 from ..llm.model_fetcher import ModelFetcher, ModelFetchError
 from ..llm.thinking import list_thinking_levels
 from ..llm.cache import ModelCache
@@ -485,7 +486,7 @@ def main_interactive(
             live.update(layout)
 
             try:
-                for chunk in llm_client.stream(cmd):
+                for chunk in llm_client.stream(cmd, system=SECURITY_AGENT_SYSTEM_PROMPT):
                     response_chunks.append(chunk)
                     md = Markdown("".join(response_chunks).strip())
                     ai_panel = Panel(
