@@ -27,3 +27,6 @@ secagent = "secagent.cli.main:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
+
+[tool.setuptools.package-data]
+"secagent.skills" = ["**/*.md"]

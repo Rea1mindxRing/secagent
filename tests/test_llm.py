@@ -9,6 +9,8 @@ from secagent.llm.cache import ModelCache
 from secagent.llm.client import LLMClient, LLMRequestError
 from secagent.llm.model_fetcher import ModelFetcher, ModelFetchError
 from secagent.cli.main import main
+from secagent.skills.registry import build_runtime_system_prompt, select_skills
+from secagent.skills.task_parser import parse_security_task
 import requests
 
 
@@ -90,6 +92,22 @@ def test_model_fetcher_does_not_fallback_on_auth_error():
             assert False
         except ModelFetchError as exc:
             assert "invalid key" in str(exc)
+
+
+def test_security_task_parser_extracts_target_and_intent():
+    task = parse_security_task("我有一个目标 https://demo.example.com:8443，帮我探测端口并找 API 漏洞")
+    assert task.targets == ["https://demo.example.com:8443"]
+    assert task.intent == "外网侦察与攻击面枚举"
+    assert "api" in task.vulnerability_hints
+
+
+def test_skill_router_injects_relevant_skill_context():
+    selected = select_skills("探测目标 192.0.2.10 的端口和 Web API")
+    assert "scanning-network-with-nmap-advanced" in selected
+    assert "conducting-api-security-testing" in selected
+    selected, prompt = build_runtime_system_prompt("探测目标 192.0.2.10 的端口")
+    assert selected
+    assert "ACTIVE SKILL" in prompt
 
 
 if __name__ == "__main__":

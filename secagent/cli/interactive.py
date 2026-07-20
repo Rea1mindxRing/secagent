@@ -19,6 +19,8 @@ from rich.align import Align
 from ..llm.config import LLMConfig
 from ..llm.client import LLMClient, LLMRequestError, get_model_context_limit
 from ..llm.model_fetcher import ModelFetcher, ModelFetchError
+from ..skills.registry import build_runtime_system_prompt
+from ..skills.task_parser import parse_security_task
 from ..llm.thinking import list_thinking_levels
 from ..llm.cache import ModelCache
 from ..security.safety_manager import SafetyManager, ApprovalRequest
@@ -477,6 +479,14 @@ def main_interactive(
         )
         conversation.append(thinking_panel)
 
+        task = parse_security_task(cmd)
+        selected_skills, runtime_system_prompt = build_runtime_system_prompt(cmd, task.to_context())
+        if selected_skills:
+            conversation.append(Text(
+                f"技能路由: {', '.join(selected_skills)} | 目标: {', '.join(task.targets) or '待识别'}",
+                style="dim cyan",
+            ))
+
         # 流式响应期间用 Live 实时刷新整个屏幕
         with Live(layout, refresh_per_second=10, screen=False, transient=False) as live:
             layout["body"].update(build_conversation_body(conversation))
@@ -485,7 +495,7 @@ def main_interactive(
             live.update(layout)
 
             try:
-                for chunk in llm_client.stream(cmd):
+                for chunk in llm_client.stream(cmd, system=runtime_system_prompt):
                     response_chunks.append(chunk)
                     md = Markdown("".join(response_chunks).strip())
                     ai_panel = Panel(
