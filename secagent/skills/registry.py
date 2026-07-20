@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 from ..llm.system_prompt import SECURITY_AGENT_SYSTEM_PROMPT
 
@@ -31,8 +31,13 @@ def select_skills(request: str, limit: int = 3) -> List[str]:
     return [name for _, name in scored[:limit]]
 
 
-def load_skill_context(request: str, limit: int = 3, max_chars_per_skill: int = 7000) -> Tuple[List[str], str]:
-    selected = select_skills(request, limit=limit)
+def load_skill_context(
+    request: str,
+    limit: int = 3,
+    max_chars_per_skill: int = 7000,
+    selected_skills: Optional[Iterable[str]] = None,
+) -> Tuple[List[str], str]:
+    selected = list(selected_skills)[:limit] if selected_skills is not None else select_skills(request, limit=limit)
     sections = []
     for name in selected:
         path = SKILL_ROOT / name / "SKILL.md"
@@ -43,8 +48,12 @@ def load_skill_context(request: str, limit: int = 3, max_chars_per_skill: int = 
     return selected, "\n\n".join(sections)
 
 
-def build_runtime_system_prompt(request: str, task_context: str = "") -> Tuple[List[str], str]:
-    selected, skill_context = load_skill_context(request)
+def build_runtime_system_prompt(
+    request: str,
+    task_context: str = "",
+    selected_skills: Optional[Iterable[str]] = None,
+) -> Tuple[List[str], str]:
+    selected, skill_context = load_skill_context(request, selected_skills=selected_skills)
     sections = [SECURITY_AGENT_SYSTEM_PROMPT]
     if task_context:
         sections.append(f"## NORMALIZED TASK\n{task_context}")
