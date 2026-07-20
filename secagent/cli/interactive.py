@@ -21,6 +21,9 @@ from ..llm.client import LLMClient, LLMRequestError, get_model_context_limit
 from ..llm.model_fetcher import ModelFetcher, ModelFetchError
 from ..skills.registry import build_runtime_system_prompt
 from ..skills.task_parser import parse_security_task
+from ..tools.builtin import build_default_registry
+from ..tools.loop import ToolLoopError, run_tool_loop
+from ..mcp.manager import MCPManager
 from ..llm.thinking import list_thinking_levels
 from ..llm.cache import ModelCache
 from ..security.safety_manager import SafetyManager, ApprovalRequest
@@ -328,6 +331,8 @@ def main_interactive(
     safety_manager = SafetyManager(safety_mode)
     safety_manager.set_approval_callback(approval_prompt)
     llm_client = LLMClient(config)
+    mcp_manager = MCPManager()
+    tool_registry = build_default_registry(safety_manager, mcp_manager)
 
     # ── 交互循环（静态渲染：每次输入前清屏重绘，输入框边框始终可见）──
     conversation: List = []
@@ -382,6 +387,7 @@ def main_interactive(
         if cmd.startswith("config"):
             config = configure_llm()
             llm_client = LLMClient(config)
+            tool_registry = build_default_registry(safety_manager, mcp_manager)
             conversation = []
             conversation.append(Panel(
                 "[green]✅ 配置已更新，已清空对话历史[/]",
@@ -486,6 +492,36 @@ def main_interactive(
                 f"技能路由: {', '.join(selected_skills)} | 目标: {', '.join(task.targets) or '待识别'}",
                 style="dim cyan",
             ))
+
+            try:
+                content, trace = run_tool_loop(
+                    llm_client,
+                    cmd,
+                    runtime_system_prompt,
+                    tool_registry,
+                )
+                conversation.pop()
+                for event in trace:
+                    conversation.append(Panel(
+                        f"工具: {event['tool']}\n参数: {event['arguments']}\n结果: {event['result']}",
+                        title=f"🔧 工具执行 #{event['round']}",
+                        border_style="yellow",
+                        box=box.SQUARE,
+                    ))
+                conversation.append(Panel(
+                    Markdown(content or "模型未返回文本结果"),
+                    title="[bold green]🤖 AI[/]",
+                    border_style="green",
+                    box=box.SQUARE,
+                ))
+            except (LLMRequestError, ToolLoopError) as exc:
+                conversation[-1] = Panel(
+                    f"[red]❌ {exc}[/]",
+                    title="[bold red]🤖 AI[/]",
+                    border_style="red",
+                    box=box.SQUARE,
+                )
+            continue
 
         # 流式响应期间用 Live 实时刷新整个屏幕
         with Live(layout, refresh_per_second=10, screen=False, transient=False) as live:

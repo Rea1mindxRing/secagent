@@ -86,6 +86,7 @@ class LLMClient:
         system: str = "",
         tools: Optional[list] = None,
         stream: bool = False,
+        messages: Optional[list] = None,
     ) -> Dict[str, Any]:
         thinking = get_thinking_params(self.config.thinking)
 
@@ -95,17 +96,18 @@ class LLMClient:
                 "max_tokens": thinking["max_tokens"],
                 "temperature": thinking["temperature"],
                 "stream": stream,
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": messages or [{"role": "user", "content": prompt}],
             }
             if system:
                 body["system"] = system
             if tools:
                 body["tools"] = tools
         else:
-            messages = []
-            if system:
-                messages.append({"role": "system", "content": system})
-            messages.append({"role": "user", "content": prompt})
+            request_messages = list(messages or [])
+            if system and not any(message.get("role") == "system" for message in request_messages):
+                request_messages.insert(0, {"role": "system", "content": system})
+            if not request_messages:
+                request_messages.append({"role": "user", "content": prompt})
 
             body = {
                 "model": self.config.model,
@@ -113,7 +115,7 @@ class LLMClient:
                 "temperature": thinking["temperature"],
                 "top_p": thinking["top_p"],
                 "stream": stream,
-                "messages": messages,
+                "messages": request_messages,
             }
             if tools:
                 body["tools"] = tools
@@ -165,9 +167,28 @@ class LLMClient:
 
     def chat(self, prompt: str, system: str = "", tools: Optional[list] = None) -> Dict[str, Any]:
         """非流式请求 LLM"""
+        return self.chat_messages(
+            [{"role": "user", "content": prompt}],
+            system=system,
+            tools=tools,
+        )
+
+    def chat_messages(
+        self,
+        messages: list,
+        system: str = "",
+        tools: Optional[list] = None,
+    ) -> Dict[str, Any]:
+        """Send a non-streaming request with conversation and tool-call support."""
         self._validate_config()
         headers = self._build_headers()
-        body = self._build_body(prompt, system=system, tools=tools, stream=False)
+        body = self._build_body(
+            messages[-1].get("content", "") if messages else "",
+            system=system,
+            tools=tools,
+            stream=False,
+            messages=messages,
+        )
         endpoint = self._get_endpoint()
         try:
             resp = self.session.post(endpoint, headers=headers, json=body, timeout=120)
@@ -193,13 +214,42 @@ class LLMClient:
         self._accumulate_usage(self._last_usage)
 
         if self.config.provider == "anthropic":
+            content = "".join(
+                item.get("text", "") for item in data.get("content", []) if item.get("type") == "text"
+            )
+            tool_calls = [
+                {
+                    "id": item["id"],
+                    "name": item["name"],
+                    "arguments": item.get("input", {}),
+                }
+                for item in data.get("content", [])
+                if item.get("type") == "tool_use"
+            ]
             return {
-                "content": data["content"][0]["text"],
+                "content": content,
                 "model": self.config.model,
+                "tool_calls": tool_calls,
+                "assistant_message": {"role": "assistant", "content": data.get("content", [])},
             }
+        message = data.get("choices", [{}])[0].get("message", {})
+        tool_calls = []
+        for call in message.get("tool_calls", []) or []:
+            function = call.get("function", {})
+            try:
+                arguments = json.loads(function.get("arguments", "{}"))
+            except json.JSONDecodeError:
+                arguments = {}
+            tool_calls.append({
+                "id": call.get("id", ""),
+                "name": function.get("name", ""),
+                "arguments": arguments,
+            })
         return {
-            "content": data["choices"][0]["message"]["content"],
+            "content": message.get("content") or "",
             "model": self.config.model,
+            "tool_calls": tool_calls,
+            "assistant_message": message,
         }
 
     def _parse_stream_chunk(self, data: Dict) -> Iterator[str]:
