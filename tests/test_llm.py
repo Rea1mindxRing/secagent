@@ -9,6 +9,10 @@ from secagent.llm.cache import ModelCache
 from secagent.llm.client import LLMClient, LLMRequestError
 from secagent.llm.model_fetcher import ModelFetcher, ModelFetchError
 from secagent.cli.main import main
+from secagent.skills.registry import build_runtime_system_prompt, select_skills
+from secagent.skills.task_parser import parse_security_task
+from secagent.tools.loop import run_tool_loop
+from secagent.tools.registry import ToolRegistry
 import requests
 
 
@@ -90,6 +94,72 @@ def test_model_fetcher_does_not_fallback_on_auth_error():
             assert False
         except ModelFetchError as exc:
             assert "invalid key" in str(exc)
+
+
+def test_security_task_parser_extracts_target_and_intent():
+    task = parse_security_task("我有一个目标 https://demo.example.com:8443，帮我探测端口并找 API 漏洞")
+    assert task.targets == ["https://demo.example.com:8443"]
+    assert task.intent == "外网侦察与攻击面枚举"
+    assert "api" in task.vulnerability_hints
+
+
+def test_skill_router_injects_relevant_skill_context():
+    selected = select_skills("探测目标 192.0.2.10 的端口和 Web API")
+    assert "scanning-network-with-nmap-advanced" in selected
+    assert "conducting-api-security-testing" in selected
+    selected, prompt = build_runtime_system_prompt("探测目标 192.0.2.10 的端口")
+    assert selected
+    assert "ACTIVE SKILL" in prompt
+
+
+def test_openai_tool_call_response_is_normalized():
+    client = LLMClient(LLMConfig(api_key="test-key"))
+    response = {
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "shell_command", "arguments": '{"command":"nmap -sV 192.0.2.10"}'},
+                }],
+            },
+        }],
+        "usage": {},
+    }
+    parsed = client._parse_response(response)
+    assert parsed["tool_calls"][0]["name"] == "shell_command"
+    assert parsed["tool_calls"][0]["arguments"]["command"].startswith("nmap")
+
+
+def test_tool_loop_executes_and_returns_tool_result():
+    class FakeClient:
+        config = LLMConfig(provider="openai")
+
+        def __init__(self):
+            self.calls = 0
+
+        def chat_messages(self, messages, system="", tools=None):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "content": "",
+                    "tool_calls": [{"id": "call-1", "name": "echo", "arguments": {"value": "ok"}}],
+                    "assistant_message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "echo", "arguments": '{"value":"ok"}'}}],
+                    },
+                }
+            assert messages[-1]["role"] == "tool"
+            return {"content": "完成", "tool_calls": [], "assistant_message": {"role": "assistant", "content": "完成"}}
+
+    registry = ToolRegistry()
+    registry.register("echo", "echo", {"type": "object", "properties": {"value": {"type": "string"}}})(lambda value: {"value": value})
+    content, trace = run_tool_loop(FakeClient(), "执行", "system", registry)
+    assert content == "完成"
+    assert trace[0]["result"] == {"value": "ok"}
 
 
 if __name__ == "__main__":
