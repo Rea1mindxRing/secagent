@@ -20,6 +20,7 @@ from rich.align import Align
 from ..llm.config import LLMConfig
 from ..llm.client import LLMClient, LLMRequestError, get_model_context_limit
 from ..llm.model_fetcher import ModelFetcher, ModelFetchError
+from ..core.workflow import build_security_workflow
 from ..skills.registry import build_runtime_system_prompt
 from ..skills.task_parser import parse_security_task
 from ..tools.builtin import build_default_registry
@@ -499,11 +500,16 @@ def main_interactive(
         )
         conversation.append(thinking_panel)
 
-        task = parse_security_task(cmd)
-        selected_skills, runtime_system_prompt = build_runtime_system_prompt(cmd, task.to_context())
+        parsed_task = parse_security_task(cmd)
+        workflow = build_security_workflow(parsed_task.to_agent_task(cmd))
+        selected_skills, runtime_system_prompt = build_runtime_system_prompt(
+            cmd,
+            workflow.to_prompt_context(),
+            selected_skills=workflow.selected_skills,
+        )
         if selected_skills:
             conversation.append(Text(
-                f"技能路由: {', '.join(selected_skills)} | 目标: {', '.join(task.targets) or '待识别'}",
+                f"工作流: {workflow.decision_summary()}",
                 style="dim cyan",
             ))
 
