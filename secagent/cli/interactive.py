@@ -1,6 +1,7 @@
 import os
 import json
 import subprocess
+import sys
 from typing import Optional, List
 from datetime import datetime
 
@@ -31,6 +32,15 @@ from ..security.policy import SafetyMode
 
 console = Console()
 _cache = ModelCache()
+
+
+def configure_stdio_encoding():
+    """Keep interactive input alive when a terminal emits invalid UTF-8 bytes."""
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, OSError):
+            continue
 
 
 def print_banner() -> Panel:
@@ -310,6 +320,7 @@ def main_interactive(
     thinking: Optional[str] = None,
     safety: Optional[str] = None,
 ):
+    configure_stdio_encoding()
     console.clear()
 
     # ── 初始配置 ──
@@ -359,6 +370,9 @@ def main_interactive(
         except (EOFError, KeyboardInterrupt):
             console.print("\n[bold yellow]👋 再见！[/]")
             break
+        except UnicodeDecodeError:
+            conversation.append(Text("⚠️ 输入编码异常，已丢弃本行并继续。请确认终端使用 UTF-8。", style="yellow"))
+            continue
 
         if not cmd:
             continue

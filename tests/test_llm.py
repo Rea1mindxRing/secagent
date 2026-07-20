@@ -112,6 +112,11 @@ def test_skill_router_injects_relevant_skill_context():
     assert "ACTIVE SKILL" in prompt
 
 
+def test_greeting_does_not_route_to_security_skill():
+    assert select_skills("hi") == []
+    assert select_skills("你好，你是什么模型") == []
+
+
 def test_openai_tool_call_response_is_normalized():
     client = LLMClient(LLMConfig(api_key="test-key"))
     response = {
